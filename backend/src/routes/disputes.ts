@@ -5,6 +5,7 @@ import {
   validateTransition,
   validateReopen,
   resolutionOutcome,
+  canStartDispute,
   DisputeStage,
 } from "../state-machine/dispute";
 
@@ -14,12 +15,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-/** Starts a dispute: NOT_DISPUTED -> UNDER_REVIEW. Idempotent-ish: 409 if one already exists. */
+/** Starts a dispute: NOT_DISPUTED -> UNDER_REVIEW. Reuses an existing NOT_DISPUTED dispute row so an analyst can restart the process after backing out. */
 disputesRouter.post("/deductions/:sourceId/dispute", (req, res) => {
   const deduction = getDeduction(req.params.sourceId);
   if (!deduction) return res.status(404).json({ error: "Deduction not found." });
-  if (deduction.dispute) {
-    return res.status(409).json({ error: "This deduction already has a dispute in progress." });
+
+  const startCheck = canStartDispute(deduction.dispute);
+  if (!startCheck.ok) {
+    return res.status(409).json({ error: startCheck.error });
   }
 
   const check = validateTransition({
@@ -31,6 +34,18 @@ disputesRouter.post("/deductions/:sourceId/dispute", (req, res) => {
 
   const db = getDb();
   const now = nowIso();
+
+  if (deduction.dispute?.stage === "NOT_DISPUTED") {
+    db.prepare(
+      `UPDATE disputes SET stage = 'UNDER_REVIEW', updated_at = ? WHERE id = ?`
+    ).run(now, deduction.dispute.id);
+    db.prepare(
+      `INSERT INTO dispute_events (dispute_id, from_stage, to_stage, note, recovered_amount, created_at)
+       VALUES (?, 'NOT_DISPUTED', 'UNDER_REVIEW', ?, NULL, ?)`
+    ).run(deduction.dispute.id, req.body?.note ?? null, now);
+    return res.status(200).json(getDeduction(deduction.sourceId));
+  }
+
   const result = db
     .prepare(
       `INSERT INTO disputes (deduction_source_id, stage, recovered_amount, recovery_amount_known, resolution_outcome, created_at, updated_at)

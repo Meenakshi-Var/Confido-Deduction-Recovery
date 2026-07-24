@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateTransition, validateReopen, resolutionOutcome, mapLegacyStatus } from "./dispute";
+import {
+  validateTransition,
+  validateReopen,
+  resolutionOutcome,
+  mapLegacyStatus,
+  canStartDispute,
+} from "./dispute";
+
+test("canStartDispute: allows restarting from an existing NOT_DISPUTED dispute row", () => {
+  assert.equal(canStartDispute(null).ok, true);
+  assert.equal(canStartDispute({ stage: "NOT_DISPUTED" }).ok, true);
+  assert.equal(canStartDispute({ stage: "UNDER_REVIEW" }).ok, false);
+});
 
 test("validateTransition: allows the legal forward path", () => {
   assert.equal(validateTransition({ from: "NOT_DISPUTED", to: "UNDER_REVIEW", deductionAmount: 100 }).ok, true);

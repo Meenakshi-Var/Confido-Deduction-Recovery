@@ -54,6 +54,12 @@ export interface TransitionResult {
  * apply the transition only if `ok` is true, so guardrails can't be bypassed
  * by calling the DB layer directly.
  */
+export function canStartDispute(dispute: { stage: DisputeStage } | null): TransitionResult {
+  if (!dispute) return { ok: true };
+  if (dispute.stage === "NOT_DISPUTED") return { ok: true };
+  return { ok: false, error: "This deduction already has a dispute in progress." };
+}
+
 export function validateTransition(input: TransitionInput): TransitionResult {
   const { from, to, recoveredAmount, deductionAmount } = input;
 

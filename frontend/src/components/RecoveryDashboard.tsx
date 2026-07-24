@@ -40,11 +40,14 @@ export function RecoveryDashboard({ summary }: { summary: RecoverySummary }) {
           <p className="text-sm font-medium text-forest-900 mb-3">By stage</p>
           <div className="space-y-2">
             {summary.byStage.map((s) => (
-              <div key={s.stage} className="flex items-center justify-between text-sm">
-                <span className="text-forest-900/70">{STAGE_LABELS[s.stage] ?? s.stage}</span>
-                <span className="font-mono text-forest-900">
-                  {s.count} · {formatCurrency(s.amount)}
-                </span>
+              <div key={s.stage} className="flex items-start justify-between gap-3 text-sm">
+                <div>
+                  <p className="text-forest-900/70">{STAGE_LABELS[s.stage] ?? s.stage}</p>
+                  <p className="text-[11px] text-forest-900/45">{s.count} disputes</p>
+                </div>
+                <p className="font-mono text-forest-900 whitespace-nowrap text-right">
+                  {formatCurrency(s.amount)}
+                </p>
               </div>
             ))}
             {summary.byStage.length === 0 && (
@@ -57,11 +60,14 @@ export function RecoveryDashboard({ summary }: { summary: RecoverySummary }) {
           <p className="text-sm font-medium text-forest-900 mb-3">By retailer</p>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
             {summary.byRetailer.map((r) => (
-              <div key={r.retailerName} className="flex items-center justify-between text-sm">
-                <span className="text-forest-900/70 truncate pr-2">{r.retailerName}</span>
-                <span className="font-mono text-forest-900 whitespace-nowrap">
-                  {formatCurrency(r.disputedAmount)} · {formatPercent(r.recoveryRate)}
-                </span>
+              <div key={r.retailerName} className="text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-forest-900/70 truncate pr-2">{r.retailerName}</span>
+                  <span className="font-mono text-forest-900 whitespace-nowrap">{r.disputeCount} disputes</span>
+                </div>
+                <div className="mt-1 text-[11px] text-forest-900/45">
+                  {formatCurrency(r.disputedAmount)} · recovery {formatPercent(r.recoveryRate)}
+                </div>
               </div>
             ))}
             {summary.byRetailer.length === 0 && (

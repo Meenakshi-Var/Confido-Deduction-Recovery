@@ -78,6 +78,20 @@ test("normalizeAll: a repeated id is flagged as DUPLICATE_ID on every occurrence
   assert.ok(result[1].flags.includes("DUPLICATE_ID"));
 });
 
+test("normalizeAll: flags a date year that's an outlier relative to the rest of the batch", () => {
+  const rows = [
+    { id: 1, company_id: 1, amount: 1, deducted_at: "2026-01-01" },
+    { id: 2, company_id: 1, amount: 1, deducted_at: "2026-02-01" },
+    { id: 3, company_id: 1, amount: 1, deducted_at: "2026-03-01" },
+    { id: 4, company_id: 1, amount: 1, deducted_at: "2028-12-21" }, // the odd one out
+  ];
+  const result = normalizeAll(rows, ctx);
+  assert.ok(!result[0].flags.includes("FUTURE_DATE"));
+  assert.ok(!result[1].flags.includes("FUTURE_DATE"));
+  assert.ok(!result[2].flags.includes("FUTURE_DATE"));
+  assert.ok(result[3].flags.includes("FUTURE_DATE"));
+});
+
 test("normalizeOne: a fully missing id gets a synthetic id and a flag, never crashes", () => {
   const result = normalizeOne({ company_id: 1, amount: 5 }, ctx, 7);
   assert.equal(result.sourceId, "synth-7");

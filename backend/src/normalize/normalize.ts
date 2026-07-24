@@ -19,10 +19,6 @@ export interface NormalizeContext {
 
 const SUSPICIOUS_AMOUNT_THRESHOLD = 100_000; // a single deduction over $100k is worth a human's eyes
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 /**
  * Normalizes one raw export row. Never throws: anything it can't confidently
  * resolve becomes a QualityFlag on the record rather than a dropped row or a
@@ -113,9 +109,10 @@ export function normalizeOne(
     flags.push("MISSING_DATE");
   } else if (deductedAt === null) {
     flags.push("UNPARSEABLE_DATE");
-  } else if (deductedAt > today()) {
-    flags.push("FUTURE_DATE");
   }
+  // FUTURE_DATE (dates whose year is off from the rest of the export, e.g. a
+  // 2028 typo among otherwise-2026 records) is flagged in a batch pass below,
+  // since "future" only means something relative to the export's own dates.
 
   // --- status ---
   const statusRaw = cleanToken(raw.status);
@@ -152,6 +149,38 @@ export function normalizeAll(rows: RawDeduction[], ctx: NormalizeContext): Norma
   for (const r of result) {
     if ((seen.get(r.sourceId) ?? 0) > 1 && !r.flags.includes("DUPLICATE_ID")) {
       r.flags.push("DUPLICATE_ID");
+    }
+  }
+
+  // Anomalous-year detection also needs the full set: "future" only means
+  // something relative to the export's own dates, not wall-clock time. A
+  // static export of 2026 deductions naturally contains dates later in 2026
+  // than whenever it happens to be read - that's not an anomaly. A deduction
+  // dated 2028 sitting among a sea of 2026 records almost certainly is (a
+  // keyed-in typo), so we flag against the dataset's own modal year instead.
+  const yearCounts = new Map<string, number>();
+  for (const r of result) {
+    if (r.deductedAt) {
+      const year = r.deductedAt.slice(0, 4);
+      yearCounts.set(year, (yearCounts.get(year) ?? 0) + 1);
+    }
+  }
+  let modalYear: number | null = null;
+  let modalCount = -1;
+  for (const [year, count] of yearCounts) {
+    if (count > modalCount) {
+      modalCount = count;
+      modalYear = Number(year);
+    }
+  }
+  if (modalYear !== null) {
+    for (const r of result) {
+      if (r.deductedAt) {
+        const year = Number(r.deductedAt.slice(0, 4));
+        if (Math.abs(year - modalYear) >= 2 && !r.flags.includes("FUTURE_DATE")) {
+          r.flags.push("FUTURE_DATE");
+        }
+      }
     }
   }
 

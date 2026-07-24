@@ -1,6 +1,6 @@
-import { DatabaseSync } from "node:sqlite";
+import { DbHandle } from "./client";
 
-export function applySchema(db: DatabaseSync) {
+export function applySchema(db: DbHandle) {
   db.exec(`
     PRAGMA foreign_keys = ON;
 

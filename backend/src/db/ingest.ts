@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { DatabaseSync } from "node:sqlite";
+import { initDb, getDb, setAutoPersist, persist } from "./client";
 import { applySchema } from "./schema";
 import { normalizeAll, Company } from "../normalize/normalize";
 import { RawDeduction } from "../normalize/types";
@@ -14,9 +14,10 @@ function loadJson<T>(file: string): T {
   return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), "utf-8"));
 }
 
-export function ingest() {
+export async function ingest() {
   if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
-  const db = new DatabaseSync(DB_PATH);
+  await initDb(DB_PATH, true);
+  const db = getDb();
   applySchema(db);
 
   const companies = loadJson<Company[]>("companies.json");
@@ -64,6 +65,10 @@ export function ingest() {
   let seededDisputes = 0;
   let unknownRecoverySeeded = 0;
 
+  // Bulk load: disable auto-persist-on-every-write (see client.ts) so we're
+  // not re-serializing the whole in-memory DB to disk on each of ~1600
+  // inserts - persist once at the end instead.
+  setAutoPersist(false);
   db.exec("BEGIN");
   try {
     for (const d of normalized) {
@@ -123,17 +128,21 @@ export function ingest() {
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
+    setAutoPersist(true);
     throw e;
   }
+  setAutoPersist(true);
+  persist();
 
   console.log(`Ingested ${normalized.length} raw rows.`);
   console.log(`  ${seen.size} unique deductions persisted (${skippedDuplicates} duplicate ids skipped).`);
   console.log(`  ${seededDisputes} disputes seeded from legacy status.`);
   console.log(`  ${unknownRecoverySeeded} of those are RESOLVED with recovery amount unknown (legacy export never recorded it).`);
-
-  db.close();
 }
 
 if (require.main === module) {
-  ingest();
+  ingest().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
 }

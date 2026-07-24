@@ -7,8 +7,10 @@ backend, React/TypeScript/Tailwind on the frontend.
 
 ## How to run it
 
-Requires Node 22.5+ (the backend uses Node's built-in `node:sqlite` module,
-no native compilation required).
+Requires Node 18+. No native compilation, no minimum-version-specific
+built-in module - the database layer is pure JavaScript/WebAssembly (see
+"Why sql.js" below), so this should install and run the same way regardless
+of what Node version you have.
 
 ```bash
 # 1. Backend: install, ingest the export into SQLite, then serve the API
@@ -33,7 +35,7 @@ cd backend
 npm run test
 ```
 
-(23 tests, all in `src/normalize` and `src/state-machine` - see "Testing philosophy" below for why the tests live there and nowhere else.)
+(27 tests, all in `src/normalize`, `src/state-machine`, and `src/db` - see "Testing philosophy" below for why the tests live there and nowhere else.)
 
 ## What this is, in one paragraph
 
@@ -176,30 +178,41 @@ the legacy export's missing recovery data.
 - **No auth, no multi-user concurrency handling.** This is a single-analyst
   demo; a real version needs sessions and per-user attribution on every
   dispute event.
-- **SQLite, not Postgres.** Right choice for a take-home (zero setup, real
-  SQL, a real durable store instead of in-memory state that vanishes on
-  restart) but not what I'd reach for with concurrent writers. It's backed
-  by Node's built-in `node:sqlite` module rather than the more common
-  `better-sqlite3` package - `better-sqlite3` ships prebuilt binaries only
-  for specific Node versions and falls back to compiling from source (which
-  needs a C++ toolchain) when none matches, which is exactly the kind of
-  friction an analyst's locked-down laptop shouldn't have to clear just to
-  run an internal tool. `node:sqlite` ships inside Node itself - nothing to
-  compile, nothing to install beyond Node - at the cost of being an
-  experimental API (stable enough here, but worth knowing before reaching
-  for it in something long-lived).
+- **SQLite, via sql.js, not Postgres.** Right choice for a take-home (real
+  SQL - joins, aggregates, `FILTER (WHERE ...)` - and a real durable store
+  instead of in-memory state that vanishes on restart) but not what I'd
+  reach for with concurrent writers. I went through two other options before
+  landing here, worth being upfront about: `better-sqlite3` (the usual
+  choice) ships prebuilt binaries only for specific Node versions and falls
+  back to compiling from source via node-gyp - which needs a C++ toolchain -
+  when none matches; Node's built-in `node:sqlite` avoids that but only
+  exists on Node 22.5+ and is still explicitly experimental. Since the whole
+  point of a take-home is that someone else can just run it, I didn't want
+  "install Visual Studio Build Tools" or "you have the wrong Node version" to
+  be the first thing standing between a reviewer and the app. `sql.js` is
+  pure JavaScript + WebAssembly compiled from SQLite itself - no native
+  addon, no minimum Node version beyond what any current LTS already
+  supports. The real cost: sql.js has no built-in file-backed mode, so
+  `backend/src/db/client.ts` persists by serializing the whole in-memory
+  database to disk after every write. Fine at this scale (fractions of a
+  second); the wrapper disables that during bulk ingestion and persists once
+  at the end instead, since doing it per-row across ~1,600 insert statements
+  would add up. A real production system would use a proper server-backed
+  Postgres instead of working around SQLite's constraints at all.
 - **No AI-assist feature.** I considered a "suggest a dispute reason"
   heuristic but cut it - a 90-minute-scoped pilot project is exactly the wrong
   place to bolt on something that reads as a gimmick if it's not genuinely
   useful, and everything it could plausibly suggest is already visible in the
   reason column.
 - **Test coverage is deliberately narrow, not broad.** Unit tests live only in
-  `normalize/` and `state-machine/` - the two places where a subtly wrong
-  answer (a misparsed date, a stage transition that shouldn't be legal) is
-  expensive and easy to get wrong silently. The Express routes and React
-  components are exercised by manual end-to-end testing instead (documented
-  in the ingest/API/UI commit messages) - broad route/component test coverage
-  would cost more time than it'd save in a project this size.
+  `normalize/`, `state-machine/`, and `db/client.ts` - the places where a
+  subtly wrong answer (a misparsed date, a stage transition that shouldn't be
+  legal, a silently-NULL column from a parameter-binding mismatch - a real
+  bug I hit and fixed during the sql.js migration, see above) is expensive
+  and easy to get wrong silently. The Express routes and React components are
+  exercised by manual end-to-end testing instead (documented in the
+  ingest/API/UI commit messages) - broad route/component test coverage would
+  cost more time than it'd save in a project this size.
 - **The recovery rollup treats all flagged amounts as real money.** I chose
   visibility over automatic exclusion (see Assumptions), but a production
   version would probably let an analyst mark a flagged row as "exclude from

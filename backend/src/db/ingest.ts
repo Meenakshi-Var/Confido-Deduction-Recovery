@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { applySchema } from "./schema";
 import { normalizeAll, Company } from "../normalize/normalize";
 import { RawDeduction } from "../normalize/types";
@@ -16,7 +16,7 @@ function loadJson<T>(file: string): T {
 
 export function ingest() {
   if (fs.existsSync(DB_PATH)) fs.unlinkSync(DB_PATH);
-  const db = new Database(DB_PATH);
+  const db = new DatabaseSync(DB_PATH);
   applySchema(db);
 
   const companies = loadJson<Company[]>("companies.json");
@@ -64,7 +64,8 @@ export function ingest() {
   let seededDisputes = 0;
   let unknownRecoverySeeded = 0;
 
-  const tx = db.transaction(() => {
+  db.exec("BEGIN");
+  try {
     for (const d of normalized) {
       if (seen.has(d.sourceId)) {
         // Duplicate ids are flagged by the normalizer; we still only persist
@@ -119,8 +120,11 @@ export function ingest() {
         );
       }
     }
-  });
-  tx();
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
 
   console.log(`Ingested ${normalized.length} raw rows.`);
   console.log(`  ${seen.size} unique deductions persisted (${skippedDuplicates} duplicate ids skipped).`);

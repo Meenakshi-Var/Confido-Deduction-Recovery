@@ -1,14 +1,18 @@
 import path from "path";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
 const DB_PATH = path.join(__dirname, "..", "..", "app.db");
 
-let db: Database.Database | null = null;
+let db: DatabaseSync | null = null;
 
-export function getDb(): Database.Database {
+export function getDb(): DatabaseSync {
   if (!db) {
-    db = new Database(DB_PATH, { fileMustExist: true });
-    db.pragma("foreign_keys = ON");
+    const fs = require("fs");
+    if (!fs.existsSync(DB_PATH)) {
+      throw new Error(`Database not found at ${DB_PATH}. Run "npm run ingest" first.`);
+    }
+    db = new DatabaseSync(DB_PATH);
+    db.exec("PRAGMA foreign_keys = ON");
   }
   return db;
 }

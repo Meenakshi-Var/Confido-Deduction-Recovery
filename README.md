@@ -7,7 +7,8 @@ backend, React/TypeScript/Tailwind on the frontend.
 
 ## How to run it
 
-Requires Node 18+.
+Requires Node 22.5+ (the backend uses Node's built-in `node:sqlite` module,
+no native compilation required).
 
 ```bash
 # 1. Backend: install, ingest the export into SQLite, then serve the API
@@ -177,7 +178,16 @@ the legacy export's missing recovery data.
   dispute event.
 - **SQLite, not Postgres.** Right choice for a take-home (zero setup, real
   SQL, a real durable store instead of in-memory state that vanishes on
-  restart) but not what I'd reach for with concurrent writers.
+  restart) but not what I'd reach for with concurrent writers. It's backed
+  by Node's built-in `node:sqlite` module rather than the more common
+  `better-sqlite3` package - `better-sqlite3` ships prebuilt binaries only
+  for specific Node versions and falls back to compiling from source (which
+  needs a C++ toolchain) when none matches, which is exactly the kind of
+  friction an analyst's locked-down laptop shouldn't have to clear just to
+  run an internal tool. `node:sqlite` ships inside Node itself - nothing to
+  compile, nothing to install beyond Node - at the cost of being an
+  experimental API (stable enough here, but worth knowing before reaching
+  for it in something long-lived).
 - **No AI-assist feature.** I considered a "suggest a dispute reason"
   heuristic but cut it - a 90-minute-scoped pilot project is exactly the wrong
   place to bolt on something that reads as a gimmick if it's not genuinely

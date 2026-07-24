@@ -1,6 +1,6 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
-export function applySchema(db: Database.Database) {
+export function applySchema(db: DatabaseSync) {
   db.exec(`
     PRAGMA foreign_keys = ON;
 

@@ -76,7 +76,7 @@ disputesRouter.patch("/disputes/:id/transition", (req, res) => {
      WHERE id = ?`
   ).run(
     toStage,
-    isResolving ? recoveredAmount : dispute.recovered_amount,
+    isResolving ? recoveredAmount ?? null : dispute.recovered_amount,
     isResolving ? 1 : dispute.recovery_amount_known,
     outcome,
     now,
@@ -85,7 +85,7 @@ disputesRouter.patch("/disputes/:id/transition", (req, res) => {
   db.prepare(
     `INSERT INTO dispute_events (dispute_id, from_stage, to_stage, note, recovered_amount, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(disputeId, dispute.stage, toStage, note ?? null, isResolving ? recoveredAmount : null, now);
+  ).run(disputeId, dispute.stage, toStage, note ?? null, isResolving ? recoveredAmount ?? null : null, now);
 
   res.json(getDeduction(dispute.deduction_source_id));
 });

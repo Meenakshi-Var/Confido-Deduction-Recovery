@@ -1,7 +1,21 @@
 import { Router } from "express";
 import { getDb } from "../db/client";
+import { STAGE_ORDER } from "../state-machine/dispute";
 
 export const recoveryRouter = Router();
+
+export function normalizeStageBuckets(rows: { stage: string; count: number; amount: number }[]) {
+  const byStage = new Map(rows.map((row) => [row.stage, row]));
+
+  return STAGE_ORDER.map((stage) => {
+    const row = byStage.get(stage);
+    return {
+      stage,
+      count: row?.count ?? 0,
+      amount: row?.amount ?? 0,
+    };
+  });
+}
 
 /**
  * "Recovered" only means something once a dispute is RESOLVED with a known
@@ -34,15 +48,18 @@ recoveryRouter.get("/recovery/summary", (req, res) => {
     )
     .get(companyId) as any;
 
-  const byStage = db
+  const byStageRows = db
     .prepare(
-      `SELECT disp.stage AS stage, COUNT(*) AS count, COALESCE(SUM(d.amount), 0) AS amount
-       FROM disputes disp
-       JOIN deductions d ON d.source_id = disp.deduction_source_id
+      `SELECT
+         COALESCE(disp.stage, 'NOT_DISPUTED') AS stage,
+         COUNT(*) AS count,
+         COALESCE(SUM(d.amount), 0) AS amount
+       FROM deductions d
+       LEFT JOIN disputes disp ON disp.deduction_source_id = d.source_id
        WHERE d.company_id = ? AND d.is_deleted = 0
-       GROUP BY disp.stage`
+       GROUP BY COALESCE(disp.stage, 'NOT_DISPUTED')`
     )
-    .all(companyId);
+    .all(companyId) as { stage: string; count: number; amount: number }[];
 
   const byRetailer = db
     .prepare(
@@ -73,7 +90,7 @@ recoveryRouter.get("/recovery/summary", (req, res) => {
     knownRecoveryDisputedAmount: overall.known_recovery_disputed_amount,
     recoveryRate,
     unknownRecoveryCount: overall.unknown_recovery_count,
-    byStage: byStage.map((r: any) => ({ stage: r.stage, count: r.count, amount: r.amount })),
+    byStage: normalizeStageBuckets(byStageRows),
     byRetailer: byRetailer.map((r) => ({
       retailerName: r.retailer_name,
       disputeCount: r.dispute_count,

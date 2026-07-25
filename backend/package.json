@@ -8,7 +8,7 @@
     "dev": "tsx src/server.ts",
     "build": "tsc -p .",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test src/normalize/*.test.ts src/state-machine/*.test.ts src/db/*.test.ts"
+    "test": "node --import tsx --test src/normalize/*.test.ts src/state-machine/*.test.ts src/db/*.test.ts src/routes/*.test.ts"
   },
   "engines": {
     "node": ">=18.0.0"

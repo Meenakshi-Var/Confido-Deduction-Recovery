@@ -218,6 +218,53 @@ the legacy export's missing recovery data.
   version would probably let an analyst mark a flagged row as "exclude from
   totals" explicitly.
 
+## Scalability
+
+The tradeoffs above cover *why* the current stack fits a take-home; this
+covers specifically *where it would break first* under real load, and what
+I'd change, in the order I'd hit these problems as data/traffic grew:
+
+1. **The `disputes` API returns every deduction for a company in one
+   response, unpaginated** (`GET /api/deductions?companyId=`). At ~1,000
+   rows this is instant. At 100,000+ rows per company - plausible for a
+   large CPG brand with a long deduction history - that response gets slow
+   and the client-side filtering in `App.tsx` (search/stage/flagged, all
+   done in the browser over the full fetched set) stops being reasonable.
+   First fix: cursor-based pagination plus moving filtering server-side
+   into the SQL query instead of post-fetch `.filter()` in React.
+2. **The recovery rollup recomputes every aggregate from scratch on every
+   request** (`GET /api/recovery/summary`). Fine at this scale - the
+   queries run in single-digit milliseconds - but the `byRetailer` query
+   in particular does a full scan with several `FILTER (WHERE ...)`
+   aggregates per row group. At real scale I'd either add indexes on
+   `retailer_id` and `deduction_source_id` (currently only `company_id` is
+   indexed) or, more likely, precompute the rollup into a materialized
+   summary table refreshed on a schedule or on write, rather than
+   recomputing it live on every dashboard load.
+3. **sql.js's persistence model is the hardest ceiling.** As covered in
+   Tradeoffs, every write re-serializes the *entire* in-memory database to
+   disk. That's a few milliseconds at ~1,000 rows and would become a real
+   bottleneck well before six-figure row counts or any concurrent writers
+   - two analysts resolving disputes at the same moment would both be
+   racing to write the whole DB file, with no locking or transaction
+   isolation between them beyond SQLite's own file-level behavior. This is
+   the one piece of the current architecture I'd replace outright, not
+   incrementally improve: a real deployment needs a server-backed database
+   (Postgres) with row-level locking and connection pooling, not an
+   in-process embedded DB at all.
+4. **Ingestion currently loads the entire JSON export into memory in one
+   pass.** Fine for a 1,000-row file; a real multi-source ingestion
+   pipeline (pulling from several ERPs, per the job posting's own
+   description of what this becomes in production) would need streaming
+   or batched processing, per-source idempotency keys so a re-run doesn't
+   double-count, and retry/backoff for source systems that are themselves
+   unreliable.
+5. **The API layer itself is already stateless per-request**, which is the
+   one piece of this that scales for free - once the database moves off
+   in-process sql.js to something server-backed, the Express layer can be
+   horizontally scaled behind a load balancer with no code changes, since
+   it holds no session or in-memory state of its own between requests.
+
 ## What I'd improve with more time
 
 - A dedicated "data quality" view - right now flags live inline in the table

@@ -5,10 +5,22 @@ A small internal tool for tracking retailer deductions and chasing down the ones
 Built for the Confido take-home. Stack: Node/TypeScript/Express/SQLite on the
 backend, React/TypeScript/Tailwind on the frontend.
 
+## Design Philosophy
+
+An analyst's goal isn't to organize deductions, it's to recover money.
+Every decision in this project was evaluated against one question: does it
+reduce time-to-recovery, increase confidence in data that's often wrong, or
+prevent an invalid step in the dispute workflow? So, please read everything below
+through that lens. The normalization layer exists because untrustworthy
+data is worthless no matter how nice the UI is, the state machine exists
+because an ambiguous process can't be trusted to run correctly at scale,
+and the recovery rollup exists because "we filed some disputes" isn't an
+answer to "is this working?"
+
 ## How to run it
 
 Requires Node 18+. No native compilation, no minimum-version-specific
-built-in module - the database layer is pure JavaScript/WebAssembly (see
+built-in module. The database layer is pure JavaScript/WebAssembly (see
 "Why sql.js" below), so this should install and run the same way regardless
 of what Node version you have.
 
@@ -41,10 +53,10 @@ npm run test
 
 An analyst needs to look at a pile of retailer deductions, tell which ones are
 worth fighting, push the ones they've decided to dispute through a process
-until the retailer responds, and see - across every retailer, over time -
+until the retailer responds, and see, across every retailer over time, 
 whether that effort is actually paying off. That's the whole product: a
 **normalization layer** that turns the messy export into something trustworthy
-(and makes what it *couldn't* trust visible instead of hiding it), a
+(and makes what it couldn't trust visible instead of hiding it), a
 **dispute state machine** that models the actual multi-stage process instead
 of a free-text status field, and a **recovery rollup** that answers "is this
 working?" rather than just listing rows.
@@ -65,9 +77,17 @@ frontend/
     lib/                   API client, shared types, formatting helpers
 ```
 
-The JSON export is treated the way a real ERP export would be: something you
-periodically *ingest* into a durable store, not something the API reads live.
-`npm run ingest` is a separate, explicit, idempotent step from `npm run dev` -
+```mermaid
+flowchart LR
+    A["deductions.json<br/>+ companies/retailers/reasons"] --> B["Normalize<br/>(parse + flag)"]
+    B --> C[("SQLite<br/>via sql.js")]
+    C --> D["Express API<br/>(state machine guardrails)"]
+    D --> E["React UI"]
+```
+
+The JSON export is treated the way a real ERP export would be, as something you
+periodically ingest into a durable store, instead of something the API reads live.
+`npm run ingest` is a separate, explicit, idempotent step from `npm run dev`, and
 running it wipes and rebuilds `app.db` from the source JSON. In production
 this would be a scheduled job pulling from Confido's actual data sources
 instead of a one-time file read.
@@ -75,31 +95,31 @@ instead of a one-time file read.
 ## The data quality work (and what it actually found)
 
 Every raw row goes through `normalizeOne` (`backend/src/normalize/normalize.ts`),
-which resolves what it confidently can - retailer name variants, date formats,
-string/number amounts, mixed boolean representations - and attaches a `flags`
-array for anything it can't. Flags are additive, never silent: a row with an
-unrecognized retailer still gets a row in the table, just with a
+which resolves what it confidently can (retailer name variants, date formats,
+string/number amounts, mixed boolean representations) and attaches a `flags`
+array for anything it can't. Flags are additive, never silent, meaning a row with an
+unrecognized retailer still gets a row in the table, just with an
 "Unrecognized retailer" badge next to it, and its raw JSON is always one click
 away in the dispute drawer. Nothing gets dropped except exact duplicate IDs
-(and those are logged at ingest time, not silently discarded).
+(and those are logged at ingest time, not just silently discarded).
 
 Two things worth knowing about, because they came out of actually looking at
-the data rather than guessing at the shape of "messy data":
+the data:
 
 - **A batch of 39 records is dated 2028**, sitting among ~970 records
   otherwise dated across 2026. My first pass flagged "future" dates by
-  comparing against the wall clock, which was useless here - a static export
+  comparing against the wall clock, which was useless here, since a static export
   covering a full calendar year naturally contains dates later in the year
   than whenever you happen to read it, so it flagged 40% of the dataset as
   "future" and told the analyst nothing. I reworked it to compare each date's
   year against the *dataset's own modal year* instead. That drops the flag
-  count from 417 to the 39 that are actually anomalous - almost certainly a
+  count from 417 to the 39 that are actually anomalous; almost certainly a
   keyed-in typo (2028 for 2026) rather than 39 legitimately future-dated
   deductions. This is in `normalizeAll`, tested in
   `normalize.test.ts`.
 - **The legacy export has no field for how much was actually recovered.**
-  Rows with `status: "Complete"` just say the dispute is over - not whether
-  the retailer paid in full, partially, or denied it. Rather than assume $0
+  Rows with `status: "Complete"` just say the dispute is over, rather than whether
+  the retailer paid in full, partially, or denied it. Instead of assuming $0
   (which would tank the recovery rate) or full credit (which would inflate
   it), ingestion seeds these as `RESOLVED` with `recovery_amount_known =
   false`, and the recovery rollup computes its rate only over disputes where
@@ -115,10 +135,16 @@ UNFI). It resolves things like `"KEHE\t"`, `"  KeHE"`, `"K e H E"`, and
 
 ## The dispute state machine
 
-```
-NOT_DISPUTED -> UNDER_REVIEW -> FILING -> FILED -> RESOLVED
-                     ^              |
-                     └──────────────┘  (analyst decides not to pursue after all)
+```mermaid
+stateDiagram-v2
+    [*] --> NOT_DISPUTED
+    NOT_DISPUTED --> UNDER_REVIEW: Start dispute
+    UNDER_REVIEW --> NOT_DISPUTED: Withdraw
+    UNDER_REVIEW --> FILING: Advance
+    FILING --> UNDER_REVIEW: Back
+    FILING --> FILED: Advance
+    FILED --> RESOLVED: Resolve (requires recoveredAmount)
+    RESOLVED --> FILED: Reopen (requires reason)
 ```
 
 - **NOT_DISPUTED**: the default. Most deductions never leave this state - most

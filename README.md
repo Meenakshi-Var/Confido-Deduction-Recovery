@@ -182,7 +182,7 @@ the legacy export's missing recovery data.
   UI's company switcher is the only way to change it.
 - Soft-deleted deductions (`is_deleted: true`) are excluded from the default
   view. The API supports `includeDeleted=true` if that's ever needed, but the
-  UI doesn't expose it - a deleted deduction is assumed to mean "this was
+  UI doesn't expose it. A deleted deduction is assumed to mean "this was
   pulled back before it reached the analyst," not "hide the money."
 - `company_id` values that don't match any row in `companies.json` (3 and 0
   both appear in the export) are preserved and flagged rather than dropped,
@@ -193,10 +193,10 @@ the legacy export's missing recovery data.
   A `SUSPICIOUS_AMOUNT_MAGNITUDE` flag exists for amounts over $100k (11
   rows, including one at $50.5M that's almost certainly a data-entry error
   with extra zeros) but these are still included in rollup totals rather than
-  excluded - flagging is meant to direct an analyst's attention, not make a
+  excluded. Flagging is meant to direct an analyst's attention, not make a
   silent judgment call about what counts as real money.
 - Reasons like "Misc" and "Other" are treated as genuinely unresolved rather
-  than mapped to a code - there's no reasonable canonical guess for what they
+  than mapped to a code. There's no reasonable canonical guess for what they
   mean, so they get a "Missing reason" flag instead of a wrong one.
 
 ## Tradeoffs
@@ -210,14 +210,14 @@ the legacy export's missing recovery data.
   reach for with concurrent writers. I went through two other options before
   landing here, worth being upfront about: `better-sqlite3` (the usual
   choice) ships prebuilt binaries only for specific Node versions and falls
-  back to compiling from source via node-gyp - which needs a C++ toolchain -
+  back to compiling from source via node-gyp, which needs a C++ toolchain,
   when none matches; Node's built-in `node:sqlite` avoids that but only
   exists on Node 22.5+ and is still explicitly experimental. Since the whole
   point of a take-home is that someone else can just run it, I didn't want
   "install Visual Studio Build Tools" or "you have the wrong Node version" to
   be the first thing standing between a reviewer and the app. `sql.js` is
-  pure JavaScript + WebAssembly compiled from SQLite itself - no native
-  addon, no minimum Node version beyond what any current LTS already
+  pure JavaScript + WebAssembly compiled from SQLite itself, meaning no native
+  addon, and no minimum Node version beyond what any current LTS already
   supports. The real cost: sql.js has no built-in file-backed mode, so
   `backend/src/db/client.ts` persists by serializing the whole in-memory
   database to disk after every write. Fine at this scale (fractions of a
@@ -226,18 +226,17 @@ the legacy export's missing recovery data.
   would add up. A real production system would use a proper server-backed
   Postgres instead of working around SQLite's constraints at all.
 - **No AI-assist feature.** I considered a "suggest a dispute reason"
-  heuristic but cut it - a 90-minute-scoped pilot project is exactly the wrong
+  heuristic but cut it. A 90-minute-scoped pilot project is exactly the wrong
   place to bolt on something that reads as a gimmick if it's not genuinely
   useful, and everything it could plausibly suggest is already visible in the
   reason column.
 - **Test coverage is deliberately narrow, not broad.** Unit tests live only in
-  `normalize/`, `state-machine/`, and `db/client.ts` - the places where a
+  `normalize/`, `state-machine/`, and `db/client.ts`, which are the places where a
   subtly wrong answer (a misparsed date, a stage transition that shouldn't be
-  legal, a silently-NULL column from a parameter-binding mismatch - a real
-  bug I hit and fixed during the sql.js migration, see above) is expensive
+  legal, a silently-NULL column from a parameter-binding mismatch) is expensive
   and easy to get wrong silently. The Express routes and React components are
   exercised by manual end-to-end testing instead (documented in the
-  ingest/API/UI commit messages) - broad route/component test coverage would
+  ingest/API/UI commit messages), as broad route/component test coverage would
   cost more time than it'd save in a project this size.
 - **The recovery rollup treats all flagged amounts as real money.** I chose
   visibility over automatic exclusion (see Assumptions), but a production
@@ -252,15 +251,15 @@ I'd change, in the order I'd hit these problems as data/traffic grew:
 
 1. **The `disputes` API returns every deduction for a company in one
    response, unpaginated** (`GET /api/deductions?companyId=`). At ~1,000
-   rows this is instant. At 100,000+ rows per company - plausible for a
-   large CPG brand with a long deduction history - that response gets slow
+   rows this is instant. At 100,000+ rows per company, which is plausible for a
+   large CPG brand with a long deduction history, that response gets slow
    and the client-side filtering in `App.tsx` (search/stage/flagged, all
    done in the browser over the full fetched set) stops being reasonable.
    First fix: cursor-based pagination plus moving filtering server-side
    into the SQL query instead of post-fetch `.filter()` in React.
 2. **The recovery rollup recomputes every aggregate from scratch on every
-   request** (`GET /api/recovery/summary`). Fine at this scale - the
-   queries run in single-digit milliseconds - but the `byRetailer` query
+   request** (`GET /api/recovery/summary`). Fine at this scale, since the
+   queries run in single-digit milliseconds, but the `byRetailer` query
    in particular does a full scan with several `FILTER (WHERE ...)`
    aggregates per row group. At real scale I'd either add indexes on
    `retailer_id` and `deduction_source_id` (currently only `company_id` is
@@ -270,22 +269,22 @@ I'd change, in the order I'd hit these problems as data/traffic grew:
 3. **sql.js's persistence model is the hardest ceiling.** As covered in
    Tradeoffs, every write re-serializes the *entire* in-memory database to
    disk. That's a few milliseconds at ~1,000 rows and would become a real
-   bottleneck well before six-figure row counts or any concurrent writers
-   - two analysts resolving disputes at the same moment would both be
+   bottleneck well before six-figure row counts or any concurrent writers.
+   Two analysts resolving disputes at the same moment would both be
    racing to write the whole DB file, with no locking or transaction
    isolation between them beyond SQLite's own file-level behavior. This is
    the one piece of the current architecture I'd replace outright, not
    incrementally improve: a real deployment needs a server-backed database
    (Postgres) with row-level locking and connection pooling, not an
    in-process embedded DB at all.
-4. **Ingestion currently loads the entire JSON export into memory in one
+5. **Ingestion currently loads the entire JSON export into memory in one
    pass.** Fine for a 1,000-row file; a real multi-source ingestion
    pipeline (pulling from several ERPs, per the job posting's own
    description of what this becomes in production) would need streaming
    or batched processing, per-source idempotency keys so a re-run doesn't
    double-count, and retry/backoff for source systems that are themselves
    unreliable.
-5. **The API layer itself is already stateless per-request**, which is the
+6. **The API layer itself is already stateless per-request**, which is the
    one piece of this that scales for free - once the database moves off
    in-process sql.js to something server-backed, the Express layer can be
    horizontally scaled behind a load balancer with no code changes, since
@@ -293,13 +292,13 @@ I'd change, in the order I'd hit these problems as data/traffic grew:
 
 ## What I'd improve with more time
 
-- A dedicated "data quality" view - right now flags live inline in the table
+- A dedicated "data quality" view. Eight now flags live inline in the table
   and drawer; a separate triage screen (grouped by flag type, with bulk
   actions) would suit an analyst working through a backlog rather than
   reading them off one deduction at a time.
 - Bulk actions (start disputes on a filtered set at once).
 - A trend view for the recovery rollup (recovery rate over time, not just a
-  current snapshot) - the data model already supports it via
+  current snapshot). The data model already supports it via
   `dispute_events`, it's just not surfaced yet.
 - Real auth and per-user audit attribution on stage transitions.
 - Replacing the alias-table approach to retailer/reason matching with
